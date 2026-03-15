@@ -1,0 +1,56 @@
+# Space-based telescope at SEL2 with 'ideal' detector — no atmosphere, thermal emission enabled
+target:
+  albedo: 0.2
+  range: 1.5e6                         # m
+  phase_angles: [0.0]                  # deg
+  thermal:
+    enabled: true
+    temperature: 300                   # K
+    emissivity: 0.9
+    absorptivity: 0.9
+
+atmosphere:
+  enabled: false
+
+optics:
+  name: SEL2
+  aperture_diameter: 0.30              # m
+  focal_length: 1.5                    # m
+  obscuration: 0.10                    # by area
+  image_circle: 52.0                   # mm
+  jitter: 0.5                          # arcsec RMS
+  throughput_files:
+    - "optics/mirror-au-uniform.csv"   # M1
+    - "optics/mirror-au-uniform.csv"   # M2
+
+filter:
+  name: none
+
+detector:
+  name: Ideal
+  pixel_size: 10e-6                    # m
+  height: 512
+  width: 512
+  dark_current: 0                      # e-/pix/s
+  read_noise: 0                        # e-
+  full_well: 1e5                       # e-
+  bit_depth: 16
+  is_cmos: false
+  frame_rate: 100                      # Hz
+  qe_file: "detectors/qe-ideal.csv"
+
+observation:
+  exposure_time: 0.5                   # seconds (fixed point for SNR-vs-mV plot)
+  exposure_range: [0.01, 5.0]          # seconds
+  mv_range: [8.0, 18.0]
+  mv_step: 0.5
+  binning: 1
+  num_apertures: 1                     # number of identical, co-boresighted apertures
+  num_fields: 1                        # number of identical, offset fields
+  num_frames: 1                        # for co-adding
+  snr_threshold: 3                     # for calculating search rate
+  streak_rate: 0.0                     # pix/s (0 = rate-track mode); user pre-determines this from geometry
+
+output:
+  plots: ["snr_vs_t", "snr_vs_mv", "search_rate"]
+  log_level: INFO

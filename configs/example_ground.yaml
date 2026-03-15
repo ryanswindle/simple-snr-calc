@@ -1,0 +1,60 @@
+# Ground-based CDK500 with IMX455 at a reference site
+target:
+  albedo: 0.2
+  range: 2.0e9                 # m
+  phase_angles: [85.0]         # deg
+  thermal:
+    enabled: false
+    temperature: 300           # K
+    emissivity: 0.9
+    absorptivity: 0.9
+
+atmosphere:
+  enabled: true
+  transmission: 0.7            # bulk
+  sky_bkg_mv: 20.0             # mag/arcsec^2
+  r0: 0.11                     # Fried parameter, meters
+  r0_wavelength: 0.65e-6       # meters
+
+optics:
+  name: CDK500
+  aperture_diameter: 0.508     # m
+  focal_length: 3.454          # m
+  obscuration: 0.15            # by area
+  image_circle: 52.0           # mm
+  jitter: 1.0                  # arcsec RMS
+  throughput_files:
+    - "optics/mirror-al.csv"   # M1
+    - "optics/mirror-al.csv"   # M2
+
+filter:
+  name: none                   # none = open (no filter)
+
+detector:
+  name: IMX455
+  pixel_size: 3.76e-6          # m
+  height: 9576
+  width: 6388
+  dark_current: 0.0022         # e-/pix/s
+  read_noise: 1.9              # e-/pix
+  full_well: 80000             # e-
+  bit_depth: 16
+  is_cmos: true
+  frame_rate: 2.5              # Hz
+  qe_file: "detectors/qe-teledyne-cosmos-8k.csv"
+
+observation:
+  exposure_time: 1.0           # seconds (fixed point for SNR-vs-mV plot)
+  exposure_range: [0.1, 10.0]  # seconds
+  mv_range: [14.0, 21.0]
+  mv_step: 0.5
+  binning: 1
+  num_apertures: 1             # number of identical, co-boresighted apertures
+  num_fields: 1                # number of identical, offset fields
+  num_frames: 1                # for co-adding
+  snr_threshold: 3             # for calculating search rate
+  streak_rate: 0.0             # pix/s (0 = rate-track mode); user pre-determines this from geometry
+
+output:
+  plots: ["snr_vs_t", "snr_vs_mv", "search_rate"]
+  log_level: INFO

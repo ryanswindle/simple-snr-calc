@@ -1,0 +1,60 @@
+# Deployable Attritable Optical system (Swindle et al. 2024, SPIE)
+target:
+  albedo: 0.2
+  range: 36e6                      # m
+  phase_angles: [85.0]             # deg
+  thermal:
+    enabled: false
+    temperature: 300               # K
+    emissivity: 0.9
+    absorptivity: 0.9
+
+atmosphere:
+  enabled: true
+  transmission: 0.7                # bulk
+  sky_bkg_mv: 19.0                 # mag/arcsec^2
+  r0: 0.11                         # Fried parameter, meters
+  r0_wavelength: 0.65e-6           # m
+
+optics:
+  name: PF1000
+  aperture_diameter: 1.02          # m
+  focal_length: 2.25               # m
+  obscuration: 0.618               # m
+  image_circle: 115                # mm
+  jitter: 1.0                      # arcsec RMS
+  throughput_files:
+    - "optics/mirror-pwi-al.csv"   # M1
+    - "optics/mirror-pwi-al.csv"   # M2
+
+filter:
+  name: none                       # none = open (no filter)
+
+detector:
+  name: Cosmos-8k
+  pixel_size: 10e-6                # m
+  height: 8120
+  width: 8120
+  dark_current: 0.15               # e-/pix/s
+  read_noise: 0.8                  # e-/pix
+  full_well: 100000                # e-
+  bit_depth: 16
+  is_cmos: true
+  frame_rate: 2.9                  # Hz
+  qe_file: "detectors/qe-teledyne-cosmos-8k.csv"
+
+observation:
+  exposure_time: 1.0               # seconds (fixed point for SNR-vs-mV plot)
+  exposure_range: [0.1, 10.0]      # seconds
+  mv_range: [14.0, 21.0]
+  mv_step: 0.5
+  binning: 1
+  num_apertures: 1                 # number of identical, co-boresighted apertures
+  num_fields: 1                    # number of identical, offset fields
+  num_frames: 1                    # for co-adding
+  snr_threshold: 6                 # for calculating search rate
+  streak_rate: 0                   # pix/s (0 = rate-track mode); user pre-determines this from geometry
+
+output:
+  plots: ["snr_vs_t", "snr_vs_mv", "search_rate"]
+  log_level: INFO

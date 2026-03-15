@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+*.egg
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Tools
+.claude/
+.pytest_cache/
+coverage.xml
+
+# Dotfiles not meant for repo
+.python-version
