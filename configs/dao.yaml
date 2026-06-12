@@ -11,9 +11,9 @@ target:
 
 atmosphere:
   enabled: true
-  transmission: 0.7                # bulk
+  transmission: 0.5 #0.7                # bulk
   sky_bkg_mv: 19.0                 # mag/arcsec^2
-  r0: 0.11                         # Fried parameter, meters
+  r0: 0.025 #0.11                         # Fried parameter, meters
   r0_wavelength: 0.65e-6           # m
 
 optics:
@@ -22,7 +22,8 @@ optics:
   focal_length: 2.25               # m
   obscuration: 0.618               # m
   image_circle: 115                # mm
-  jitter: 1.0                      # arcsec RMS
+  jitter: 3.0                      # arcsec RMS
+  step_settle_time: 5.6            # s, settle between fields
   throughput_files:
     - "optics/mirror-pwi-al.csv"   # M1
     - "optics/mirror-pwi-al.csv"   # M2
@@ -40,7 +41,7 @@ detector:
   full_well: 100000                # e-
   bit_depth: 16
   is_cmos: true
-  frame_rate: 2.9                  # Hz
+  frame_rate: 0.34                  # Hz
   qe_file: "detectors/qe-teledyne-cosmos-8k.csv"
 
 observation:

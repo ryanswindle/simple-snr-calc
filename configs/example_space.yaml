@@ -19,6 +19,7 @@ optics:
   obscuration: 0.10                    # by area
   image_circle: 52.0                   # mm
   jitter: 0.5                          # arcsec RMS
+  step_settle_time: 5.0                # s, slew + settle between fields
   throughput_files:
     - "optics/mirror-au-uniform.csv"   # M1
     - "optics/mirror-au-uniform.csv"   # M2

@@ -50,6 +50,7 @@ class OpticsConfig(BaseModel):
     obscuration: float = 0.15          # fraction by area
     image_circle: float | None = None  # mm
     jitter: float = 1.0                # arcsec RMS
+    step_settle_time: float = 5.0      # seconds, slew + settle between fields
     throughput_files: list[str] = []
 
 

@@ -271,6 +271,7 @@ class SNRCalculator:
         # Search rates
         search_rates = compute_search_rates(
             mvs, snr_grid, its, self.fov, obs, cfg.detector.frame_rate,
+            step_settle_time=cfg.optics.step_settle_time,
         )
 
         return SweepResult(
