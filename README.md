@@ -130,6 +130,73 @@ data/
 
 Curves are 2-column CSV files (wavelength in nm, fractional value) and can be added by placing new files in the appropriate directory.
 
+## Overlay on on-sky data (senpai)
+
+The `simple_snr_calc.overlay` subpackage draws model curves on top of
+[`senpai`](https://github.com/zgazak/senpai)'s nightly calibration plots, with
+the model evaluated under each night's **measured** conditions (transmission,
+sky brightness, seeing, grid cadence) rather than design-spec values — so a
+model-vs-data comparison is fair. senpai is an optional, heavier dependency:
+
+```bash
+uv pip install -e ".[overlay]"   # pulls in astro-senpai
+```
+
+senpai need not be importable just to *read* its outputs (`plot_data.json` is
+plain JSON); it's only required to regenerate that JSON from raw image batches.
+
+### Search rate
+
+```bash
+# <run_dir> is a senpai night directory containing calibration/plot_data.json
+snr-overlay search-rate /path/to/DAO01_20260602 \
+    --config configs/dao.yaml --out search_rate_overlay.png
+```
+
+```python
+from simple_snr_calc.config import load_config
+from simple_snr_calc.overlay import plot_search_rate_overlay
+
+cfg = load_config("configs/dao.yaml")
+plot_search_rate_overlay(
+    "DAO01_20260602/calibration/plot_data.json",  # senpai on-sky data
+    "nights_summary.csv",                          # senpai measured conditions
+    cfg,                                           # model design config
+    "search_rate_overlay.png",
+)
+```
+
+Conditions are mapped onto the config in `overlay/conditions.py`: zenith
+transmission → `atmosphere.transmission`, sky brightness → `atmosphere.sky_bkg_mv`,
+measured FWHM → `atmosphere.r0` (jitter folded in to avoid double-counting), plus
+senpai's fitted grid `overhead_s` → `optics.step_settle_time` and target σ →
+`observation.snr_threshold` so the model's duty cycle and detection threshold
+match the on-sky panel.
+
+### SNR vs magnitude
+
+```bash
+snr-overlay snr-vs-mag /path/to/DAO01_20260602 --config configs/dao.yaml
+```
+
+Redraws senpai's `snr_vs_mag_weathermasked` panel (measured median SNR vs Gaia G
+magnitude, per exposure, normalized to airmass = 1) and overlays the model's
+`compute_snr(mv, t)` per exposure (dashed, matched colors) under the same night's
+measured conditions. The model SNR is peak-pixel; senpai's is its measured
+(aperture) SNR, so a vertical offset is expected — it is the model-vs-data
+comparison, not corrected away.
+
+### SNR vs exposure
+
+```bash
+snr-overlay snr-vs-exposure /path/to/DAO01_20260602 --config configs/dao.yaml
+```
+
+Redraws senpai's by-magnitude `snr_vs_exposure` panel (measured median SNR vs
+exposure time, one series per magnitude bin, coverage + photometric pooled) and
+overlays the model's `compute_snr(bin_centre, t)` vs exposure (dashed, matched
+colors) under the night's measured conditions.
+
 ## License
 
 See [LICENSE](LICENSE).

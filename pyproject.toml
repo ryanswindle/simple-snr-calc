@@ -17,11 +17,18 @@ dependencies = [
 
 [project.scripts]
 simple-snr-calc = "simple_snr_calc.cli:main"
+snr-overlay = "simple_snr_calc.overlay.cli:main"
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "pytest-cov",
+]
+# Overlay model curves onto senpai's on-sky calibration plots. senpai is a
+# heavy, optional dependency pulled in only for the simple_snr_calc.overlay
+# feature; the core SNR model never imports it.
+overlay = [
+    "astro-senpai>=2.3",
 ]
 
 [build-system]
