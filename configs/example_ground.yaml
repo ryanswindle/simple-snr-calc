@@ -59,3 +59,6 @@ observation:
 output:
   plots: ["snr_vs_t", "snr_vs_mv", "search_rate"]
   log_level: INFO
+  sigma: 1.0                    # SNR error-band half-width, in std devs (0 = off)
+  visualize_noise: false        # true also overplots each noise source's own band
+                                # (target shot, sky, dark, read, quantization)

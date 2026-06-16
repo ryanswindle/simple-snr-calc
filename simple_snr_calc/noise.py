@@ -3,6 +3,17 @@
 from dataclasses import dataclass
 import numpy as np
 
+# Independent variance components of the noise budget, in the order they are
+# summed in quadrature to form ``NoiseBudget.total``. These are the sources
+# shown as individual SNR error bands when ``output.visualize_noise`` is set.
+NOISE_SOURCES = (
+    "target_shot",
+    "sky_background",
+    "dark_current",
+    "read",
+    "quantization",
+)
+
 
 @dataclass
 class NoiseBudget:
@@ -88,3 +99,48 @@ def compute_noise(peak_signal: float, sky_bkg_rate: float,
         quantization=quant,
         total=total,
     )
+
+
+def snr_band_unit(noise: NoiseBudget) -> dict[str, float]:
+    """SNR error-bar half-widths at sigma = 1, propagated through the SNR.
+
+    Treating the measured signal as the random variable and letting the noise
+    estimate track it (as real photometry does), the 1-sigma error bar on the
+    *coadded* ``SNR = sqrt(Nc) * S / sqrt(S + B)`` works out to
+
+        sigma(SNR) = (S/2 + B) / (S + B) = 1 - f_shot / 2 ,
+
+    where ``S`` is the target-shot variance, ``B`` is every other variance
+    (sky + dark + read + quantization), and ``f_shot = (target_shot/total)**2``
+    is the target-shot variance fraction. This is the honest bar: it includes
+    every noise source, is nonzero everywhere -- it runs from 1/2 when
+    target-shot (photon) limited to 1 when read/sky/dark/quant limited -- and
+    is independent of the number of coadds (the sqrt(Nc) boost cancels between
+    the SNR and the correspondingly sharpened flux estimate).
+
+    The per-source *contributions* to the bar add linearly (each is
+    proportional to that source's variance, not its RMS):
+
+        target_shot:  f_shot / 2
+        source X:     f_X = (sigma_X / total)**2     (sky, dark, read, quant)
+
+    Target shot is down-weighted by 1/2 because it is the only source
+    correlated with the signal: when the signal fluctuates, the shot term in
+    the denominator moves with it and half-cancels the change. These
+    contributions sum to ``"combined"``.
+
+    Returns one entry per :data:`NOISE_SOURCES` (each source's contribution to
+    the bar) plus ``"combined"`` (the full error bar = their sum). Multiply any
+    entry by the configured ``sigma`` to get the plotted half-width (in SNR
+    units, added to / subtracted from the nominal SNR).
+    """
+    keys = (*NOISE_SOURCES, "combined")
+    if noise.total <= 0:
+        return {k: 0.0 for k in keys}
+    inv_total_var = 1.0 / noise.total ** 2
+    out = {}
+    for s in NOISE_SOURCES:
+        var_frac = getattr(noise, s) ** 2 * inv_total_var
+        out[s] = 0.5 * var_frac if s == "target_shot" else var_frac
+    out["combined"] = sum(out[s] for s in NOISE_SOURCES)
+    return out

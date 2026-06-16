@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 def data_dir() -> Path:
@@ -99,6 +99,14 @@ class ObservationConfig(BaseModel):
 class OutputConfig(BaseModel):
     plots: list[str] = ["snr_vs_t", "snr_vs_mv", "search_rate"]
     log_level: str = "INFO"
+    # SNR error-band settings. ``sigma`` is the band half-width in standard
+    # deviations (set to 0 to disable the band). By default a single combined
+    # band is drawn -- the SNR uncertainty from every noise source except the
+    # target's own (irreducible) shot noise -- so it responds to read noise,
+    # dark current, sky brightness, bit depth, etc. Set ``visualize_noise:
+    # true`` to additionally overplot each individual noise source's band.
+    sigma: float = Field(default=1.0, ge=0.0)
+    visualize_noise: bool = False
 
 
 class SNRConfig(BaseModel):

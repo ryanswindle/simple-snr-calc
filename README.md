@@ -112,8 +112,48 @@ Key sections:
 | `filter` | Filter name (looked up in `data/filters/`) or explicit file path |
 | `detector` | Pixel size, dimensions, noise parameters, QE curve |
 | `observation` | Exposure time, magnitude range, binning, coadding, SNR threshold |
+| `output` | Which plots to draw, log level, and the SNR error-band settings |
 
 Set `atmosphere.enabled: false` for space-based sensors. Set `target.thermal.enabled: true` to include thermal emission.
+
+### SNR error bands
+
+All three SNR-based plots (`snr_vs_t`, `snr_vs_mv`, `search_rate`) draw a shaded
+1σ error band. Treating the measured signal as the random variable and letting the
+noise estimate track it (as real photometry does), the error bar on the coadded
+`SNR = √Nc · S / √(S + B)` works out to
+
+```
+σ(SNR) = (S/2 + B) / (S + B) = 1 − f_shot/2
+```
+
+where `S` is the target-shot variance, `B` is every other variance
+(sky + dark + read + quantization), and `f_shot = (target_shot/total)²` is the
+target-shot variance fraction. This **single combined band**, drawn by default,
+includes every noise source, is nonzero everywhere — it runs from ½ when the
+observation is target-shot (photon) limited to 1 when read/sky/dark/quant limited
+— and is independent of the number of coadds (the √Nc boost cancels between the
+SNR and the correspondingly sharpened flux estimate, though on the log axis
+coadding still visibly tightens the band relative to the rising curve). It
+responds to `read_noise`, `dark_current`, `sky_bkg_mv`, `bit_depth`, binning, and
+so on. The same per-`(mv, t)` calculation seeds all three plots, including the
+search-rate envelope (obtained by propagating the band through the
+detection-threshold crossing).
+
+```yaml
+output:
+  sigma: 1.0              # band half-width in standard deviations (0 disables it)
+  visualize_noise: false  # true also overplots each noise source's contribution
+```
+
+Set `visualize_noise: true` to additionally overplot each source's *contribution*
+to the bar (`target_shot`, `sky_background`, `dark_current`, `read`,
+`quantization`), color-coded and consistent across panels. The contributions add
+linearly to the combined band — `f_shot/2` for target shot (down-weighted because
+it is the only source correlated with the signal) and `(σ_source/σ_total)²` for
+the others — so the widest one is the dominant source (e.g. read noise at faint
+magnitudes / short exposures, sky background at faint magnitudes / long
+exposures).
 
 ## Data Files
 

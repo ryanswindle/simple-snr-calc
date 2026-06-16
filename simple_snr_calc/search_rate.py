@@ -54,9 +54,49 @@ def compute_search_rates(mvs: np.ndarray, snr_grid: np.ndarray,
             else:
                 t_cross = exposure_times[idx]
             t_snr = t_cross * num_frames
-            duty_time = max(step_settle_time, readout_time)
+            # duty_time = max(step_settle_time, readout_time)
+            duty_time = step_settle_time + readout_time #max(step_settle_time, readout_time)
             search_rates[i] = (
                 num_fields * fov_h * fov_w / ((t_snr + duty_time) / 3600.0)
             )
 
     return search_rates
+
+
+def compute_search_rate_band(mvs: np.ndarray, snr_grid: np.ndarray,
+                             band_grid: np.ndarray,
+                             exposure_times: np.ndarray,
+                             fov: tuple[float, float],
+                             obs_config, frame_rate: float | None = None,
+                             step_settle_time: float = 5.0,
+                             ) -> tuple[np.ndarray, np.ndarray]:
+    """Search-rate envelope implied by an SNR error band.
+
+    The search rate is driven by when each magnitude's SNR-vs-time curve first
+    crosses the detection threshold. Perturbing that curve up/down by the SNR
+    band therefore moves the crossing time and hence the rate: a higher SNR
+    reaches threshold sooner, so ``snr_grid + band_grid`` yields the upper
+    (faster) search rate and ``snr_grid - band_grid`` the lower one. This
+    reuses the same crossing logic as :func:`compute_search_rates`, so the band
+    is seeded by exactly the same per-source calculation as the SNR plots.
+
+    Parameters
+    ----------
+    band_grid : 2D ndarray
+        Per-cell SNR band half-width, already scaled by ``output.sigma``
+        (same shape as ``snr_grid``).
+
+    Returns
+    -------
+    (lo, hi) : tuple of ndarray
+        Lower and upper search rates in deg^2/hr for each magnitude.
+    """
+    hi = compute_search_rates(
+        mvs, snr_grid + band_grid, exposure_times, fov,
+        obs_config, frame_rate, step_settle_time,
+    )
+    lo = compute_search_rates(
+        mvs, np.clip(snr_grid - band_grid, 0.0, None), exposure_times, fov,
+        obs_config, frame_rate, step_settle_time,
+    )
+    return lo, hi

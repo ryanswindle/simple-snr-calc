@@ -22,7 +22,7 @@ from .optics import (
     compute_zero_point,
     watts_to_photons_factor,
 )
-from .noise import compute_noise, NoiseBudget
+from .noise import compute_noise, snr_band_unit, NoiseBudget, NOISE_SOURCES
 from .search_rate import compute_search_rates
 
 
@@ -46,6 +46,10 @@ class SweepResult:
     snr_at_fixed_t: np.ndarray      # shape (n_mv,)
     saturated_at_fixed_t: np.ndarray
     search_rates: np.ndarray        # shape (n_mv,)
+    # SNR error-bar half-widths at sigma=1: per-source contributions plus
+    # "combined" (the full bar = their sum). Multiply by output.sigma to plot.
+    snr_band_unit: dict[str, np.ndarray]            # key -> (n_mv, n_t)
+    snr_band_unit_at_fixed_t: dict[str, np.ndarray] # key -> (n_mv,)
     # Derived quantities
     ifov: float
     fov: tuple[float, float]
@@ -251,17 +255,31 @@ class SNRCalculator:
         snr_at_fixed_t = np.zeros(len(mvs))
         sat_at_fixed_t = np.zeros(len(mvs), dtype=bool)
 
+        # SNR error-bar half-widths (sigma=1), seeded once here and reused by
+        # all three plots and the search-rate envelope. Keys are the per-source
+        # contributions plus "combined" (the default, full bar); see
+        # snr_band_unit.
+        band_sources = (*NOISE_SOURCES, "combined")
+        band_grid = {s: np.zeros((len(mvs), len(its))) for s in band_sources}
+        band_at_fixed_t = {s: np.zeros(len(mvs)) for s in band_sources}
+
         for i, mv in enumerate(mvs):
             # Fixed exposure time
             result = self.compute_snr(mv, obs.exposure_time)
             snr_at_fixed_t[i] = result.snr
             sat_at_fixed_t[i] = result.saturated
+            bu = snr_band_unit(result.noise)
+            for s in band_sources:
+                band_at_fixed_t[s][i] = bu[s]
 
             # Sweep exposure times
             for j, t in enumerate(its):
                 result = self.compute_snr(mv, t)
                 snr_grid[i, j] = result.snr
                 sat_grid[i, j] = result.saturated
+                bu = snr_band_unit(result.noise)
+                for s in band_sources:
+                    band_grid[s][i, j] = bu[s]
 
             logger.info(
                 f"mV={mv:.1f}: SNR@t={obs.exposure_time}s = "
@@ -282,6 +300,8 @@ class SNRCalculator:
             snr_at_fixed_t=snr_at_fixed_t,
             saturated_at_fixed_t=sat_at_fixed_t,
             search_rates=search_rates,
+            snr_band_unit=band_grid,
+            snr_band_unit_at_fixed_t=band_at_fixed_t,
             ifov=self.ifov,
             fov=self.fov,
             fwhm_arcsec=self.fwhm_arcsec,
