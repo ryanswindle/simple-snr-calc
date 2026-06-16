@@ -41,6 +41,16 @@ class AtmosphereConfig(BaseModel):
     sky_bkg_mv: float = 20.0     # mag/arcsec^2
     r0: float = 0.11             # Fried parameter, meters
     r0_wavelength: float = 0.65e-6  # meters
+    # Scintillation (Young 1967 / Osborn 2015). ``scintillation_coeff`` is the
+    # empirical Young coefficient C_Y (theoretical ~1.5); 0 disables the term.
+    # It adds a signal-proportional noise -> a magnitude-independent SNR ceiling
+    # of 1/sigma that scales as sqrt(t). Only applied when ``enabled`` (no
+    # scintillation in space). Fit ``scintillation_coeff`` to the bright-star
+    # SNR plateau for a given site; ``airmass`` defaults to 1 to match
+    # airmass-normalized (zenith) on-sky data.
+    scintillation_coeff: float = 0.0     # Young C_Y; 0 = off
+    airmass: float = 1.0                 # sec(z); scintillation noise ∝ X^3
+    observatory_altitude: float = 0.0    # meters; scintillation ∝ exp(-2h/H)
 
 
 class OpticsConfig(BaseModel):
@@ -81,6 +91,11 @@ class DetectorConfig(BaseModel):
     is_cmos: bool = True
     frame_rate: float | None = None  # Hz
     qe_file: str = "detectors/qe-imx455.csv"
+    # Signal-proportional systematic floor (flat-field / PSF-model residual), as
+    # a fraction of source signal. Like scintillation it is multiplicative, but
+    # exposure-independent, so it sets the asymptotic bright-end SNR ceiling of
+    # 1/systematic_floor that even long exposures cannot beat. 0 = off.
+    systematic_floor: float = 0.0
 
 
 class ObservationConfig(BaseModel):
@@ -94,6 +109,11 @@ class ObservationConfig(BaseModel):
     num_frames: int = 1
     snr_threshold: float = 6.0
     streak_rate: float = 0.0          # pix/s (0 = rate-track mode)
+    # Longest exposure the search-rate root-find may integrate to. None auto-
+    # selects the exposure that just reaches the faintest magnitude, so the rate
+    # tapers smoothly to ~0 at the faint edge; set a number (seconds) to cap it
+    # at a realistic value (the faint tail then drops to 0 once it's unreachable).
+    max_search_exposure_s: float | None = None
 
 
 class OutputConfig(BaseModel):

@@ -17,6 +17,7 @@ import numpy as np
 
 from ..config import SNRConfig, load_config
 from ..snr import SNRCalculator
+from ..search_rate import auto_max_exposure, exposure_to_reach
 from .conditions import (
     GAIA_G_MINUS_V_SUN,
     NightConditions,
@@ -50,28 +51,6 @@ def save_overlay_variants(fig, ax, output_path: str | Path) -> list[Path]:
     return [output_path, clean_path]
 
 
-def _exposure_to_reach(calc: SNRCalculator, mv: float, target_snr: float,
-                       t_lo: float, t_hi: float) -> float | None:
-    """Smallest exposure in ``[t_lo, t_hi]`` whose SNR(mv) >= target, else None.
-
-    SNR rises monotonically with exposure for unsaturated sources, so a geometric
-    bisection converges; this avoids the coarse fixed grid in ``SNRCalculator.sweep``
-    and stays accurate across many decades of exposure.
-    """
-    if calc.compute_snr(mv, t_lo).snr >= target_snr:
-        return t_lo
-    if calc.compute_snr(mv, t_hi).snr < target_snr:
-        return None
-    lo, hi = t_lo, t_hi
-    for _ in range(60):
-        mid = math.sqrt(lo * hi)
-        if calc.compute_snr(mv, mid).snr >= target_snr:
-            hi = mid
-        else:
-            lo = mid
-    return hi
-
-
 def model_search_rate_vs_mag(
     config: SNRConfig, mv_step: float = 0.1, max_exposure_s: float = 10.0,
     zero_point_offset: float = 0.0,
@@ -100,10 +79,13 @@ def model_search_rate_vs_mag(
                1.0 / cfg.detector.frame_rate if cfg.detector.frame_rate else 0.0)
     fov_sq = float(calc.fov[0] * calc.fov[1])
 
+    def snr_at(mv, t):
+        return calc.compute_snr(mv, t).snr
+
     rates = np.zeros(len(mvs))
     max_tcross = 0.0
     for i, mv in enumerate(mvs):
-        t_cross = _exposure_to_reach(calc, float(mv), target, t_lo, max_exposure_s)
+        t_cross = exposure_to_reach(snr_at, float(mv), target, t_lo, max_exposure_s)
         if t_cross is None:
             continue
         cadence_s = t_cross * obs.num_frames + duty
@@ -208,10 +190,9 @@ def plot_search_rate_overlay(
     if max_exposure_s is None:
         calc = SNRCalculator(cfg)
         calc.zero_point += GAIA_G_MINUS_V_SUN  # mv_range is Gaia G; match it
-        t_edge = _exposure_to_reach(
-            calc, float(mv_range[1]), cfg.observation.snr_threshold,
-            cfg.observation.exposure_range[0], 1.0e6)
-        max_exposure_s = t_edge if t_edge is not None else 1.0e6
+        max_exposure_s = auto_max_exposure(
+            lambda mv, t: calc.compute_snr(mv, t).snr, float(mv_range[1]),
+            cfg.observation.snr_threshold, cfg.observation.exposure_range[0])
     model_mvs, model_rates, info = model_search_rate_vs_mag(
         cfg, mv_step=mv_step, max_exposure_s=max_exposure_s,
         zero_point_offset=GAIA_G_MINUS_V_SUN)

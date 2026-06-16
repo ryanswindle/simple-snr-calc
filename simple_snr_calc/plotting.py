@@ -8,7 +8,6 @@ import matplotlib.patches as mpatches
 from ._constants import SUN_MV
 from .noise import NOISE_SOURCES
 from .target import phase_angle_factor
-from .search_rate import compute_search_rate_band
 
 # Color/label for the default combined band and each individual noise source,
 # shared across all three panels so a source reads the same everywhere.
@@ -220,18 +219,17 @@ def _plot_search_rate(ax, results, config):
 
     ax.plot(results.mvs, results.search_rates, marker='o', linestyle='-')
 
-    # Search-rate envelope: propagate the SNR band through the detection-
-    # threshold crossing that sets the rate. Combined band by default, plus
-    # each noise source when visualize_noise is on.
+    # Search-rate envelope: the SNR band propagated through the detection-
+    # threshold crossing that sets the rate, precomputed in SNRCalculator.sweep
+    # (where the calculator can root-find the perturbed crossing). Combined band
+    # by default, plus each noise source when visualize_noise is on.
     if sigma > 0:
         keys = ["combined"] + (list(_OVERLAY_SOURCES) if viz else [])
         for k in keys:
-            band = sigma * results.snr_band_unit[k]
-            lo, hi = compute_search_rate_band(
-                results.mvs, results.snr_grid, band, results.exposure_times,
-                results.fov, config.observation, config.detector.frame_rate,
-                step_settle_time=config.optics.step_settle_time,
-            )
+            band = results.search_rate_band.get(k)
+            if band is None:
+                continue
+            lo, hi = band
             alpha = _ALPHA_COMBINED if k == "combined" else _ALPHA_SOURCE
             ax.fill_between(results.mvs, lo, hi, color=_BAND_COLORS[k],
                             alpha=alpha, linewidth=0, zorder=1)

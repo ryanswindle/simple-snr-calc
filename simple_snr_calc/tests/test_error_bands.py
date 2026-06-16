@@ -24,7 +24,6 @@ import pytest
 from simple_snr_calc.config import OutputConfig
 from simple_snr_calc.noise import NOISE_SOURCES, compute_noise, snr_band_unit
 from simple_snr_calc.plotting import plot_summary
-from simple_snr_calc.search_rate import compute_search_rate_band
 from simple_snr_calc.snr import SNRCalculator
 
 
@@ -188,37 +187,34 @@ class TestRegimes:
 class TestSearchRateBand:
 
     def test_band_brackets_nominal(self, ground_config):
-        """lo <= nominal <= hi for the combined and per-source bands."""
+        """lo <= nominal <= hi for the precomputed combined and per-source bands."""
         ground_config.observation.snr_threshold = 3.0
+        ground_config.output.visualize_noise = True  # precompute per-source bands
         r = SNRCalculator(ground_config).sweep()
         for s in ["combined", "read", "sky_background"]:
-            band = r.snr_band_unit[s]
-            lo, hi = compute_search_rate_band(
-                r.mvs, r.snr_grid, band, r.exposure_times, r.fov,
-                ground_config.observation, ground_config.detector.frame_rate,
-                step_settle_time=ground_config.optics.step_settle_time,
-            )
+            lo, hi = r.search_rate_band[s]
             assert np.all(hi >= r.search_rates - 1e-9)
             assert np.all(lo <= r.search_rates + 1e-9)
             assert np.all(hi >= lo - 1e-9)
 
     def test_wider_band_widens_envelope(self, ground_config):
         """A larger sigma can only widen (never shrink) the rate envelope."""
-        ground_config.observation.snr_threshold = 3.0
-        r = SNRCalculator(ground_config).sweep()
-        band = r.snr_band_unit["combined"]
-        lo1, hi1 = compute_search_rate_band(
-            r.mvs, r.snr_grid, 1.0 * band, r.exposure_times, r.fov,
-            ground_config.observation, ground_config.detector.frame_rate,
-            step_settle_time=ground_config.optics.step_settle_time,
-        )
-        lo3, hi3 = compute_search_rate_band(
-            r.mvs, r.snr_grid, 3.0 * band, r.exposure_times, r.fov,
-            ground_config.observation, ground_config.detector.frame_rate,
-            step_settle_time=ground_config.optics.step_settle_time,
-        )
+        c1 = ground_config.model_copy(deep=True)
+        c1.observation.snr_threshold = 3.0
+        c1.output.sigma = 1.0
+        c3 = ground_config.model_copy(deep=True)
+        c3.observation.snr_threshold = 3.0
+        c3.output.sigma = 3.0
+        lo1, hi1 = SNRCalculator(c1).sweep().search_rate_band["combined"]
+        lo3, hi3 = SNRCalculator(c3).sweep().search_rate_band["combined"]
         assert np.all(hi3 >= hi1 - 1e-9)
         assert np.all(lo3 <= lo1 + 1e-9)
+
+    def test_band_absent_when_sigma_zero(self, ground_config):
+        """No band is precomputed when the SNR band is disabled."""
+        ground_config.output.sigma = 0.0
+        r = SNRCalculator(ground_config).sweep()
+        assert r.search_rate_band == {}
 
 
 # ── Config + plotting integration ────────────────────────────────────────────

@@ -3,15 +3,29 @@
 from dataclasses import dataclass
 import numpy as np
 
-# Independent variance components of the noise budget, in the order they are
-# summed in quadrature to form ``NoiseBudget.total``. These are the sources
-# shown as individual SNR error bands when ``output.visualize_noise`` is set.
+# Additive variance components of the noise budget, in the order they are
+# summed in quadrature to form ``NoiseBudget.total``. These are signal-
+# *independent* in their fraction of the signal (shot grows as sqrt(S); the rest
+# are fixed), so each one gets its own SNR error band when
+# ``output.visualize_noise`` is set. See :data:`MULTIPLICATIVE_SOURCES` for the
+# signal-proportional terms, which sit in ``total`` but carry no error band.
 NOISE_SOURCES = (
     "target_shot",
     "sky_background",
     "dark_current",
     "read",
     "quantization",
+)
+
+# Multiplicative variance components: noise proportional to the source signal
+# itself (sigma * S), so they impose a magnitude-independent SNR ceiling of
+# 1/sigma rather than averaging down with brightness. They contribute to the
+# total noise (and the variance budget) but *zero* to the SNR error band --
+# being perfectly correlated with the signal, they cancel out of d(SNR)/d(S)
+# (see :func:`snr_band_unit`).
+MULTIPLICATIVE_SOURCES = (
+    "scintillation",
+    "systematic",
 )
 
 
@@ -24,22 +38,23 @@ class NoiseBudget:
     read: float
     quantization: float
     total: float
+    scintillation: float = 0.0
+    systematic: float = 0.0
 
     def variance_fractions(self) -> dict[str, float]:
         """Return noise variance fractions (noise power budget).
 
         Each value is the fraction of total noise variance contributed
-        by that source. Fractions sum to 1.0.
+        by that source. Fractions sum to 1.0 and cover every component --
+        the additive :data:`NOISE_SOURCES` and the multiplicative
+        :data:`MULTIPLICATIVE_SOURCES` (scintillation, systematic).
         """
         total_var = self.total ** 2
         if total_var == 0:
             return {}
         return {
-            'target_shot': self.target_shot ** 2 / total_var,
-            'sky_background': self.sky_background ** 2 / total_var,
-            'dark_current': self.dark_current ** 2 / total_var,
-            'read': self.read ** 2 / total_var,
-            'quantization': self.quantization ** 2 / total_var,
+            s: getattr(self, s) ** 2 / total_var
+            for s in (*NOISE_SOURCES, *MULTIPLICATIVE_SOURCES)
         }
 
 
@@ -47,7 +62,8 @@ def compute_noise(peak_signal: float, sky_bkg_rate: float,
                   dark_current: float, read_noise: float,
                   full_well: float, bit_depth: int,
                   exposure_time: float, binning: int,
-                  is_cmos: bool) -> NoiseBudget:
+                  is_cmos: bool, scint_fraction: float = 0.0,
+                  systematic_fraction: float = 0.0) -> NoiseBudget:
     """Compute noise budget for a single pixel observation.
 
     Parameters
@@ -72,8 +88,16 @@ def compute_noise(peak_signal: float, sky_bkg_rate: float,
         If True, scale read noise by binning (CMOS reads each pixel
         independently, so N^2 pixels contribute N^2 variance terms,
         giving RMS = read_noise * N).
+    scint_fraction : float
+        Scintillation noise as a fraction of source signal (see
+        :func:`simple_snr_calc.atmosphere.scintillation_fraction`). Adds
+        ``scint_fraction * peak_signal`` electrons in quadrature.
+    systematic_fraction : float
+        Flat-field/PSF-model systematic floor as a fraction of source signal.
+        Adds ``systematic_fraction * peak_signal`` electrons in quadrature.
     """
-    target_shot = np.sqrt(max(peak_signal, 0.0))
+    signal = max(peak_signal, 0.0)
+    target_shot = np.sqrt(signal)
     sky_shot = np.sqrt(max(sky_bkg_rate * exposure_time, 0.0))
     dark_shot = np.sqrt(max(dark_current * exposure_time, 0.0))
 
@@ -83,12 +107,21 @@ def compute_noise(peak_signal: float, sky_bkg_rate: float,
 
     quant = full_well / 2 ** bit_depth / np.sqrt(12.0)
 
+    # Multiplicative noise: proportional to the source signal itself. Applied to
+    # the same (peak-pixel) signal the SNR uses, so it sets an SNR ceiling of
+    # 1/sqrt(scint_fraction**2 + systematic_fraction**2) regardless of the
+    # peak-vs-aperture convention (numerator and this term scale together).
+    scint = max(scint_fraction, 0.0) * signal
+    systematic = max(systematic_fraction, 0.0) * signal
+
     total = np.sqrt(
         target_shot ** 2
         + sky_shot ** 2
         + dark_shot ** 2
         + rn ** 2
         + quant ** 2
+        + scint ** 2
+        + systematic ** 2
     )
 
     return NoiseBudget(
@@ -98,6 +131,8 @@ def compute_noise(peak_signal: float, sky_bkg_rate: float,
         read=rn,
         quantization=quant,
         total=total,
+        scintillation=scint,
+        systematic=systematic,
     )
 
 
@@ -110,13 +145,11 @@ def snr_band_unit(noise: NoiseBudget) -> dict[str, float]:
 
         sigma(SNR) = (S/2 + B) / (S + B) = 1 - f_shot / 2 ,
 
-    where ``S`` is the target-shot variance, ``B`` is every other variance
-    (sky + dark + read + quantization), and ``f_shot = (target_shot/total)**2``
-    is the target-shot variance fraction. This is the honest bar: it includes
-    every noise source, is nonzero everywhere -- it runs from 1/2 when
-    target-shot (photon) limited to 1 when read/sky/dark/quant limited -- and
-    is independent of the number of coadds (the sqrt(Nc) boost cancels between
-    the SNR and the correspondingly sharpened flux estimate).
+    where ``S`` is the target-shot variance, ``B`` is every other *additive*
+    variance (sky + dark + read + quantization), and ``f_shot =
+    (target_shot/total)**2`` is the target-shot variance fraction. This is the
+    honest bar: it is independent of the number of coadds (the sqrt(Nc) boost
+    cancels between the SNR and the correspondingly sharpened flux estimate).
 
     The per-source *contributions* to the bar add linearly (each is
     proportional to that source's variance, not its RMS):
@@ -124,13 +157,25 @@ def snr_band_unit(noise: NoiseBudget) -> dict[str, float]:
         target_shot:  f_shot / 2
         source X:     f_X = (sigma_X / total)**2     (sky, dark, read, quant)
 
-    Target shot is down-weighted by 1/2 because it is the only source
+    Target shot is down-weighted by 1/2 because it is the only *additive* source
     correlated with the signal: when the signal fluctuates, the shot term in
     the denominator moves with it and half-cancels the change. These
     contributions sum to ``"combined"``.
 
+    Multiplicative noise (scintillation, systematic) is the limiting case of
+    that correlation: it tracks the signal *exactly*, so ``SNR = S/(sigma*S) =
+    1/sigma`` is insensitive to S and these terms drop out of d(SNR)/dS entirely
+    -- their variance ``c*S**2`` cancels in the numerator, leaving the same
+    ``(S/2 + B)`` over the now-larger ``total = S + B + c*S**2``. So they
+    contribute *zero* to the bar yet shrink every other contribution. Hence,
+    *without* multiplicative noise the bar runs from 1/2 (target-shot limited)
+    to 1 (read/sky/dark/quant limited); *with* it dominating, "combined" falls
+    below 1/2 toward 0 (a scintillation-limited SNR is essentially exact).
+
     Returns one entry per :data:`NOISE_SOURCES` (each source's contribution to
-    the bar) plus ``"combined"`` (the full error bar = their sum). Multiply any
+    the bar) plus ``"combined"`` (the full error bar = their sum); the
+    :data:`MULTIPLICATIVE_SOURCES` have no entry (their contribution is zero by
+    the cancellation above, but they still enter via ``total``). Multiply any
     entry by the configured ``sigma`` to get the plotted half-width (in SNR
     units, added to / subtracted from the nominal SNR).
     """

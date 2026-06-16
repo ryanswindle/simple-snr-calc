@@ -12,7 +12,11 @@ from .target import (
     radius_from_mv,
     thermal_photon_rate,
 )
-from .atmosphere import sky_background_power, combined_psf_sigma_rad
+from .atmosphere import (
+    sky_background_power,
+    combined_psf_sigma_rad,
+    scintillation_fraction,
+)
 from .optics import (
     build_throughput,
     compute_ifov,
@@ -23,7 +27,11 @@ from .optics import (
     watts_to_photons_factor,
 )
 from .noise import compute_noise, snr_band_unit, NoiseBudget, NOISE_SOURCES
-from .search_rate import compute_search_rates
+from .search_rate import (
+    compute_search_rates,
+    compute_search_rate_band,
+    auto_max_exposure,
+)
 
 
 @dataclass
@@ -45,7 +53,7 @@ class SweepResult:
     saturated_grid: np.ndarray      # shape (n_mv, n_t), bool
     snr_at_fixed_t: np.ndarray      # shape (n_mv,)
     saturated_at_fixed_t: np.ndarray
-    search_rates: np.ndarray        # shape (n_mv,)
+    search_rates: np.ndarray        # shape (n_mv,), nominal rate per magnitude
     # SNR error-bar half-widths at sigma=1: per-source contributions plus
     # "combined" (the full bar = their sum). Multiply by output.sigma to plot.
     snr_band_unit: dict[str, np.ndarray]            # key -> (n_mv, n_t)
@@ -56,6 +64,10 @@ class SweepResult:
     fwhm_arcsec: float
     ensquared_energy: float
     zero_point: float
+    # Search-rate error envelope: band key -> (lo, hi) rate arrays, each shape
+    # (n_mv,). Populated for "combined" (and every noise source when
+    # visualize_noise is set) whenever output.sigma > 0; empty otherwise.
+    search_rate_band: dict = field(default_factory=dict, repr=False)
     throughput: np.ndarray = field(default=None, repr=False)
     wl_nm: np.ndarray = field(default=None, repr=False)
 
@@ -198,6 +210,21 @@ class SNRCalculator:
         peak_frac = peak_pixel_fraction(self.ensquared_energy, streak_length)
         peak_signal = total_pps * exposure_time * peak_frac
 
+        # Multiplicative (signal-proportional) noise: scintillation is
+        # atmospheric (none in space), the systematic floor is instrumental.
+        # Both impose a magnitude-independent SNR ceiling absent from the
+        # shot/sky/read budget; scintillation also fans the ceiling out as
+        # sqrt(t) between exposures.
+        if cfg.atmosphere.enabled:
+            scint_fraction = scintillation_fraction(
+                cfg.optics.aperture_diameter, exposure_time,
+                airmass=cfg.atmosphere.airmass,
+                observatory_altitude=cfg.atmosphere.observatory_altitude,
+                coeff=cfg.atmosphere.scintillation_coeff,
+            )
+        else:
+            scint_fraction = 0.0
+
         # Noise budget
         noise = compute_noise(
             peak_signal=peak_signal,
@@ -209,6 +236,8 @@ class SNRCalculator:
             exposure_time=exposure_time,
             binning=cfg.observation.binning,
             is_cmos=cfg.detector.is_cmos,
+            scint_fraction=scint_fraction,
+            systematic_fraction=cfg.detector.systematic_floor,
         )
 
         # SNR (single frame)
@@ -286,11 +315,50 @@ class SNRCalculator:
                 f"{snr_at_fixed_t[i]:.1f}"
             )
 
-        # Search rates
+        # Search rates: root-find the detection-threshold crossing per magnitude
+        # (geometric bisection) rather than reading it off the SNR-vs-t grid, so
+        # the rate tapers smoothly to ~0 at faint magnitudes instead of cliff-
+        # dropping once the crossing exceeds the grid's longest exposure.
+        def snr_at(mv, t):
+            return self.compute_snr(mv, t).snr
+
+        t_lo = obs.exposure_range[0]
+        max_exp = obs.max_search_exposure_s
+        if max_exp is None:
+            max_exp = auto_max_exposure(
+                snr_at, float(mvs[-1]), obs.snr_threshold, t_lo)
+
         search_rates = compute_search_rates(
-            mvs, snr_grid, its, self.fov, obs, cfg.detector.frame_rate,
+            snr_at, mvs, obs.snr_threshold, self.fov, obs,
+            cfg.detector.frame_rate,
             step_settle_time=cfg.optics.step_settle_time,
+            t_lo=t_lo, max_exposure_s=max_exp,
         )
+
+        # Search-rate error envelope: perturb the SNR curve by each band's
+        # sigma-scaled half-width and re-cross the threshold. Combined by
+        # default, plus each source when visualize_noise is set -- the same keys
+        # the SNR panels shade. Shares the nominal exposure cap.
+        sigma = cfg.output.sigma
+        search_rate_band: dict = {}
+        if sigma > 0:
+            band_keys = ["combined"] + (
+                list(NOISE_SOURCES) if cfg.output.visualize_noise else [])
+
+            def make_snr_band_at(key):
+                def snr_band_at(mv, t):
+                    res = self.compute_snr(mv, t)
+                    return res.snr, sigma * snr_band_unit(res.noise)[key]
+                return snr_band_at
+
+            for key in band_keys:
+                lo, hi = compute_search_rate_band(
+                    make_snr_band_at(key), mvs, obs.snr_threshold, self.fov,
+                    obs, cfg.detector.frame_rate,
+                    step_settle_time=cfg.optics.step_settle_time,
+                    t_lo=t_lo, max_exposure_s=max_exp,
+                )
+                search_rate_band[key] = (lo, hi)
 
         return SweepResult(
             mvs=mvs,
@@ -300,6 +368,7 @@ class SNRCalculator:
             snr_at_fixed_t=snr_at_fixed_t,
             saturated_at_fixed_t=sat_at_fixed_t,
             search_rates=search_rates,
+            search_rate_band=search_rate_band,
             snr_band_unit=band_grid,
             snr_band_unit_at_fixed_t=band_at_fixed_t,
             ifov=self.ifov,
