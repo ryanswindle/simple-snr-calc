@@ -17,13 +17,37 @@ import numpy as np
 
 from ..config import SNRConfig, load_config
 from ..snr import SNRCalculator
-from .conditions import NightConditions, apply_conditions, load_nights_summary
+from .conditions import (
+    GAIA_G_MINUS_V_SUN,
+    NightConditions,
+    apply_conditions,
+    load_night_conditions,
+)
 
 
 def load_plot_data(path: str | Path) -> dict:
     """Load a senpai ``plot_data.json`` (plain JSON; senpai not required)."""
     with open(path) as f:
         return json.load(f)
+
+
+def save_overlay_variants(fig, ax, output_path: str | Path) -> list[Path]:
+    """Save the titled figure and a title-less ``*_clean`` twin; return both paths.
+
+    Two PNGs are written from one figure (no re-rendering): the titled
+    ``output_path`` and, with the in-figure title stripped, a
+    ``<stem>_clean<suffix>`` sibling. The clean variant is the paper-ready one --
+    its per-night condition summary belongs in the manuscript caption, not baked
+    into the image. The titled path is returned first.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    clean_path = output_path.with_name(
+        f"{output_path.stem}_clean{output_path.suffix}")
+    ax.set_title("")
+    fig.savefig(clean_path, dpi=150, bbox_inches="tight")
+    return [output_path, clean_path]
 
 
 def _exposure_to_reach(calc: SNRCalculator, mv: float, target_snr: float,
@@ -49,7 +73,8 @@ def _exposure_to_reach(calc: SNRCalculator, mv: float, target_snr: float,
 
 
 def model_search_rate_vs_mag(
-    config: SNRConfig, mv_step: float = 0.1, max_exposure_s: float = 10.0
+    config: SNRConfig, mv_step: float = 0.1, max_exposure_s: float = 10.0,
+    zero_point_offset: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
     """Model search rate vs magnitude, returning ``(mvs, rates_deg2_per_hr, info)``.
 
@@ -59,9 +84,13 @@ def model_search_rate_vs_mag(
     ``duty = max(step_settle, readout)``. A magnitude whose target sigma is
     unreachable within ``max_exposure_s`` gets rate 0. Raising ``max_exposure_s``
     pushes the rate smoothly toward 0 at faint magnitudes instead of cliff-dropping.
+
+    ``zero_point_offset`` shifts the system zero point (mag); pass
+    :data:`GAIA_G_MINUS_V_SUN` to evaluate the native-V model on a Gaia-G axis.
     """
     cfg = config.model_copy(deep=True)
     calc = SNRCalculator(cfg)
+    calc.zero_point += zero_point_offset
     obs = cfg.observation
     target = obs.snr_threshold
     t_lo = obs.exposure_range[0]
@@ -120,7 +149,7 @@ def _condition_summary(cfg: SNRConfig, cond: NightConditions, info: dict) -> str
 
 def plot_search_rate_overlay(
     plot_data: dict | str | Path,
-    nights_summary: str | Path | dict[str, NightConditions],
+    conditions: NightConditions | str | Path,
     base_config: str | Path | SNRConfig,
     output_path: str | Path,
     *,
@@ -128,12 +157,17 @@ def plot_search_rate_overlay(
     max_exposure_s: float | None = None,
     plt=None,
 ):
-    """Render the search-rate overlay PNG and return its :class:`Path`.
+    """Render the search-rate overlay and return the written paths.
+
+    Two PNGs are written: the titled ``output_path`` and a title-less
+    ``*_clean`` twin for paper figures (see :func:`save_overlay_variants`);
+    both :class:`Path` objects are returned, titled first.
 
     Parameters
     ----------
     plot_data : senpai ``plot_data.json`` path or already-loaded dict.
-    nights_summary : senpai ``nights_summary.csv`` path or loaded mapping.
+    conditions : this night's measured conditions -- a :class:`NightConditions`
+        or a path to its ``calibration/night_calibration.json``.
     base_config : simple-snr-calc config (e.g. ``configs/dao.yaml``) path/object;
         its design values are overridden per-night by the measured conditions.
     output_path : where to write the PNG.
@@ -145,8 +179,8 @@ def plot_search_rate_overlay(
     """
     if not isinstance(plot_data, dict):
         plot_data = load_plot_data(plot_data)
-    if not isinstance(nights_summary, dict):
-        nights_summary = load_nights_summary(nights_summary)
+    cond = (conditions if isinstance(conditions, NightConditions)
+            else load_night_conditions(conditions))
     base = base_config if isinstance(base_config, SNRConfig) else load_config(base_config)
 
     meta = plot_data.get("meta", {})
@@ -155,12 +189,6 @@ def plot_search_rate_overlay(
     if d is None:
         raise ValueError(f"no 'search_rate' plot in plot_data for {night_id!r}")
 
-    cond = nights_summary.get(night_id)
-    if cond is None:
-        raise KeyError(
-            f"night {night_id!r} not in nights_summary "
-            f"({sorted(nights_summary)})"
-        )
     if cond.moon_illumination is None and meta.get("moon_illumination") is not None:
         cond.moon_illumination = float(meta["moon_illumination"])
 
@@ -179,12 +207,14 @@ def plot_search_rate_overlay(
     # magnitude, so the model curve runs down to ~0 at the x-axis edge.
     if max_exposure_s is None:
         calc = SNRCalculator(cfg)
+        calc.zero_point += GAIA_G_MINUS_V_SUN  # mv_range is Gaia G; match it
         t_edge = _exposure_to_reach(
             calc, float(mv_range[1]), cfg.observation.snr_threshold,
             cfg.observation.exposure_range[0], 1.0e6)
         max_exposure_s = t_edge if t_edge is not None else 1.0e6
     model_mvs, model_rates, info = model_search_rate_vs_mag(
-        cfg, mv_step=mv_step, max_exposure_s=max_exposure_s)
+        cfg, mv_step=mv_step, max_exposure_s=max_exposure_s,
+        zero_point_offset=GAIA_G_MINUS_V_SUN)
 
     if plt is None:
         import matplotlib
@@ -214,13 +244,13 @@ def plot_search_rate_overlay(
     i0 = int(nz[0]) if len(nz) else 0
     ax.plot(model_mvs[i0:], model_rates[i0:], "-", color="tab:blue", lw=2.2,
             alpha=0.9,
-            label=(f"simple-snr-calc model (measured cond., "
+            label=(f"model (measured cond., "
                    f"≤{_fmt_exposure(info['max_exposure_s'])} exp)"))
 
     target_snr = d.get("target_snr")
-    ax.set_xlabel("Apparent Magnitude (Catalog)")
+    ax.set_xlabel("Gaia G magnitude")
     ax.set_ylabel(
-        f"Search Rate (deg²/hour to TARGET {target_snr:.0f}σ)"
+        f"Search Rate (deg²/hour to {target_snr:.0f}σ)"
         if target_snr else "Search Rate (deg²/hour)"
     )
     ax.set_title(
@@ -232,8 +262,6 @@ def plot_search_rate_overlay(
     ax.legend(loc="lower left", fontsize=9)
 
     fig.tight_layout()
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    paths = save_overlay_variants(fig, ax, output_path)
     plt.close(fig)
-    return output_path
+    return paths

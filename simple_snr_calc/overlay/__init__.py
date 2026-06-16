@@ -1,9 +1,12 @@
 """Overlay simple-snr-calc model curves on senpai on-sky calibration plots.
 
 This subpackage couples the SNR model to `senpai`'s nightly calibration outputs
-(``plot_data.json`` + ``nights_summary.csv``) so a model curve can be drawn on
-the same axes as the measured on-sky data, evaluated under the *measured* sky
-conditions for that night (transmission, sky brightness, seeing).
+(a night's ``calibration/`` folder: ``plot_data.json`` for the on-sky panels and
+``night_calibration.json`` for that night's measured conditions) so a model curve
+can be drawn on the same axes as the measured on-sky data, evaluated under the
+*measured* sky conditions for that night (transmission, sky brightness, seeing).
+Everything is read from the night's own ``calibration/`` folder; no cross-night
+aggregate (e.g. nights_summary.csv) is used.
 
 senpai is an optional dependency of simple-snr-calc -- install it with the
 ``overlay`` extra (``pip install simple-snr-calc[overlay]``) or have
@@ -14,7 +17,7 @@ need not be importable to *load* it -- only to *regenerate* it from raw batches)
 
 from .conditions import (
     NightConditions,
-    load_nights_summary,
+    load_night_conditions,
     apply_conditions,
     r0_from_fwhm,
 )
@@ -34,7 +37,7 @@ from .snr_vs_exposure import (
 
 __all__ = [
     "NightConditions",
-    "load_nights_summary",
+    "load_night_conditions",
     "apply_conditions",
     "r0_from_fwhm",
     "load_plot_data",

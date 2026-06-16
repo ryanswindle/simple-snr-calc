@@ -21,19 +21,28 @@ import numpy as np
 
 from ..config import SNRConfig, load_config
 from ..snr import SNRCalculator
-from .conditions import NightConditions, apply_conditions, load_nights_summary
-from .search_rate import load_plot_data
+from .conditions import (
+    GAIA_G_MINUS_V_SUN,
+    NightConditions,
+    apply_conditions,
+    load_night_conditions,
+)
+from .search_rate import load_plot_data, save_overlay_variants
 
 
 def model_snr_vs_exposure(
     config: SNRConfig, mags, exp_min: float, exp_max: float, n: int = 60,
+    zero_point_offset: float = 0.0,
 ) -> tuple[np.ndarray, dict, dict]:
     """Model SNR vs exposure for each magnitude.
 
     Returns ``(exposures, {mag: snr_array}, info)``. One ``SNRCalculator`` is
-    built and reused across all magnitudes and exposures.
+    built and reused across all magnitudes and exposures. ``zero_point_offset``
+    shifts the system zero point (mag); pass :data:`GAIA_G_MINUS_V_SUN` so the
+    Gaia-G bin magnitudes are evaluated on the native-V model consistently.
     """
     calc = SNRCalculator(config)
+    calc.zero_point += zero_point_offset
     exps = np.linspace(exp_min, exp_max, n)
     curves: dict = {}
     for m in mags:
@@ -49,17 +58,25 @@ def model_snr_vs_exposure(
 
 def plot_snr_vs_exposure_overlay(
     plot_data: dict | str | Path,
-    nights_summary: str | Path | dict[str, NightConditions],
+    conditions: NightConditions | str | Path,
     base_config: str | Path | SNRConfig,
     output_path: str | Path,
     *,
     plt=None,
 ):
-    """Render the SNR-vs-exposure (by-magnitude) overlay PNG; return its Path."""
+    """Render the SNR-vs-exposure (by-magnitude) overlay; return the written paths.
+
+    Writes the titled ``output_path`` and a title-less ``*_clean`` twin for paper
+    figures, returning both :class:`Path` objects (titled first).
+
+    ``conditions`` is this night's measured conditions -- a
+    :class:`NightConditions` or a path to its
+    ``calibration/night_calibration.json``.
+    """
     if not isinstance(plot_data, dict):
         plot_data = load_plot_data(plot_data)
-    if not isinstance(nights_summary, dict):
-        nights_summary = load_nights_summary(nights_summary)
+    cond = (conditions if isinstance(conditions, NightConditions)
+            else load_night_conditions(conditions))
     base = base_config if isinstance(base_config, SNRConfig) else load_config(base_config)
 
     meta = plot_data.get("meta", {})
@@ -71,11 +88,6 @@ def plot_snr_vs_exposure_overlay(
     if not pooled:
         raise ValueError(f"no pooled SNR-vs-exposure series for {night_id!r}")
 
-    cond = nights_summary.get(night_id)
-    if cond is None:
-        raise KeyError(
-            f"night {night_id!r} not in nights_summary ({sorted(nights_summary)})")
-
     std_exps = d.get("std_exps") or sorted({x for s in pooled for x in s["x"]})
     bins = d.get("bins") or [s["bin"] for s in pooled]
     # Centre magnitude of each pooled series drives the model curve for that bin.
@@ -84,7 +96,8 @@ def plot_snr_vs_exposure_overlay(
     cfg = apply_conditions(base, cond)
     exp_min, exp_max = float(min(std_exps)), float(max(std_exps))
     model_exps, model_curves, info = model_snr_vs_exposure(
-        cfg, sorted(bin_mags.values()), exp_min, exp_max)
+        cfg, sorted(bin_mags.values()), exp_min, exp_max,
+        zero_point_offset=GAIA_G_MINUS_V_SUN)
 
     if plt is None:
         import matplotlib
@@ -126,16 +139,18 @@ def plot_snr_vs_exposure_overlay(
 
     handles, labels = ax.get_legend_handles_labels()
     handles.append(Line2D([0], [0], color="black", ls="--", lw=1.8))
-    labels.append("simple-snr-calc model")
-    ax.legend(handles, labels, loc="center left", bbox_to_anchor=(1.01, 0.5),
-              fontsize=8, title=r"m$_G$", ncol=1)
+    labels.append("model")
+    # Widen the x-axis so the legend fits inside on the right without overlapping
+    # the (rising) curves; the cleared strip must exceed the legend's width.
+    x0, x1 = ax.get_xlim()
+    ax.set_xlim(x0, x1 + 0.18 * (x1 - x0))
+    ax.legend(handles, labels, loc="center right", fontsize=8,
+              title=r"m$_G$", ncol=1, framealpha=0.9)
 
     fig.tight_layout()
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    paths = save_overlay_variants(fig, ax, output_path)
     plt.close(fig)
-    return output_path
+    return paths
 
 
 def _cond_line(cond: NightConditions, info: dict) -> str:

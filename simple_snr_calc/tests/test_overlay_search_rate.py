@@ -5,7 +5,7 @@ requiring senpai or real night data -- plot_data is plain JSON, so a small
 synthetic dict stands in for senpai's output.
 """
 
-import csv
+import json
 import math
 
 import numpy as np
@@ -16,27 +16,37 @@ from simple_snr_calc.optics import compute_ifov
 from simple_snr_calc.overlay import (
     NightConditions,
     apply_conditions,
-    load_nights_summary,
+    load_night_conditions,
     model_search_rate_vs_mag,
     plot_search_rate_overlay,
     r0_from_fwhm,
 )
 
-# A senpai nights_summary.csv row (note the unicode headers senpai emits).
-_SUMMARY_ROW = {
-    "night": "DAO01_20260602",
-    "moon%": "0.92",
-    "moonSep°": "61.4",
-    "k": "0.097",
-    "T_zen": "0.91",
-    "clear%": "0.27",
-    "FWHM_px": "11.7",
-    "FWHM_sd": "5.8",
-    "sky_ADU": "3311",
-    "sky_μ": "18.57",
-    "lim50": "16.55",
-    "nFrm": "1393",
-}
+
+def _cond(**overrides):
+    """A night's measured conditions, as load_night_conditions would yield."""
+    base = dict(night_id="DAO01_20260602", extinction_k=0.097,
+                zenith_transmission=0.91, sky_mag_arcsec2=18.57, fwhm_px=11.7,
+                limiting_mag_50=16.55, moon_illumination=0.92, moon_sep_deg=61.4)
+    base.update(overrides)
+    return NightConditions(**base)
+
+
+def _night_calibration(night_id="DAO01_20260602", **cond_overrides):
+    """A minimal senpai ``night_calibration.json`` dict (the 'conditions' block)."""
+    conditions = {
+        "moon_illumination": 0.92,
+        "moon_sep_median_deg": 61.4,
+        "extinction_k": 0.097,
+        "zenith_transmission": 0.91,
+        "fwhm_px_median": 11.7,
+        "sky_mag_arcsec2_median": 18.57,
+        "limiting_mag_50_median": 16.55,
+    }
+    conditions.update(cond_overrides)
+    return {"night_id": night_id,
+            "moon_illumination": conditions["moon_illumination"],
+            "conditions": conditions}
 
 
 def _synthetic_plot_data(night_id="DAO01_20260602"):
@@ -65,30 +75,27 @@ def _synthetic_plot_data(night_id="DAO01_20260602"):
 
 class TestNightConditions:
 
-    def test_from_summary_row(self):
-        c = NightConditions.from_summary_row(_SUMMARY_ROW)
+    def test_load_night_conditions(self, tmp_path):
+        p = tmp_path / "night_calibration.json"
+        p.write_text(json.dumps(_night_calibration()))
+        c = load_night_conditions(p)
         assert c.night_id == "DAO01_20260602"
         assert c.zenith_transmission == pytest.approx(0.91)
         assert c.sky_mag_arcsec2 == pytest.approx(18.57)
         assert c.fwhm_px == pytest.approx(11.7)
         assert c.limiting_mag_50 == pytest.approx(16.55)
         assert c.moon_illumination == pytest.approx(0.92)
+        assert c.moon_sep_deg == pytest.approx(61.4)
 
-    def test_blank_cells_become_none(self):
-        row = dict(_SUMMARY_ROW, T_zen="", **{"sky_μ": "—"})
-        c = NightConditions.from_summary_row(row)
+    def test_missing_measurements_become_none(self, tmp_path):
+        cal = _night_calibration()
+        del cal["conditions"]["zenith_transmission"]
+        cal["conditions"]["sky_mag_arcsec2_median"] = None
+        p = tmp_path / "night_calibration.json"
+        p.write_text(json.dumps(cal))
+        c = load_night_conditions(p)
         assert c.zenith_transmission is None
         assert c.sky_mag_arcsec2 is None
-
-    def test_load_nights_summary(self, tmp_path):
-        p = tmp_path / "nights_summary.csv"
-        with open(p, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(_SUMMARY_ROW))
-            w.writeheader()
-            w.writerow(_SUMMARY_ROW)
-        out = load_nights_summary(p)
-        assert "DAO01_20260602" in out
-        assert out["DAO01_20260602"].zenith_transmission == pytest.approx(0.91)
 
 
 class TestR0FromFwhm:
@@ -111,7 +118,7 @@ class TestR0FromFwhm:
 class TestApplyConditions:
 
     def test_overrides_applied(self, ground_config):
-        c = NightConditions.from_summary_row(_SUMMARY_ROW)
+        c = _cond()
         cfg = apply_conditions(ground_config, c, overhead_s=8.2,
                                target_snr=3.0, mv_range=(8, 19))
         assert cfg.atmosphere.transmission == pytest.approx(0.91)
@@ -122,7 +129,7 @@ class TestApplyConditions:
 
     def test_fwhm_maps_to_measured_total(self, ground_config):
         """r0 + zeroed jitter must reproduce the measured FWHM exactly."""
-        c = NightConditions.from_summary_row(_SUMMARY_ROW)
+        c = _cond()
         cfg = apply_conditions(ground_config, c)
         assert cfg.optics.jitter == 0.0
         ifov = compute_ifov(cfg.detector.pixel_size, cfg.optics.focal_length)
@@ -133,7 +140,7 @@ class TestApplyConditions:
 
     def test_does_not_mutate_input(self, ground_config):
         before = ground_config.atmosphere.transmission
-        c = NightConditions.from_summary_row(_SUMMARY_ROW)
+        c = _cond()
         apply_conditions(ground_config, c)
         assert ground_config.atmosphere.transmission == before
         assert ground_config.optics.jitter != 0.0  # original jitter untouched
@@ -161,19 +168,39 @@ class TestModelSearchRate:
 
 class TestPlotOverlay:
 
-    def test_writes_png(self, tmp_path, ground_config):
-        summary = {"DAO01_20260602":
-                   NightConditions.from_summary_row(_SUMMARY_ROW)}
+    def test_writes_titled_and_clean(self, tmp_path, ground_config):
         out = tmp_path / "overlay.png"
-        path = plot_search_rate_overlay(
-            _synthetic_plot_data(), summary, ground_config, out, mv_step=0.5
+        paths = plot_search_rate_overlay(
+            _synthetic_plot_data(), _cond(), ground_config, out, mv_step=0.5
         )
-        assert path.exists()
-        assert path.stat().st_size > 0
+        assert [p.name for p in paths] == ["overlay.png", "overlay_clean.png"]
+        for p in paths:
+            assert p.exists() and p.stat().st_size > 0
 
-    def test_unknown_night_raises(self, ground_config):
-        with pytest.raises(KeyError):
-            plot_search_rate_overlay(
-                _synthetic_plot_data("MISSING_NIGHT"), {}, ground_config,
-                "/tmp/_unused.png",
-            )
+    def test_accepts_calibration_json_path(self, tmp_path, ground_config):
+        """A path to night_calibration.json is loaded directly -- no CSV needed."""
+        p = tmp_path / "night_calibration.json"
+        p.write_text(json.dumps(_night_calibration()))
+        out = tmp_path / "overlay_from_path.png"
+        paths = plot_search_rate_overlay(
+            _synthetic_plot_data(), p, ground_config, out, mv_step=0.5)
+        assert all(q.exists() and q.stat().st_size > 0 for q in paths)
+
+
+class TestSaveOverlayVariants:
+
+    def test_writes_clean_twin_without_title(self, tmp_path):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from simple_snr_calc.overlay.search_rate import save_overlay_variants
+
+        fig, ax = plt.subplots()
+        ax.set_title("a title")
+        out = tmp_path / "fig.png"
+        paths = save_overlay_variants(fig, ax, out)
+        plt.close(fig)
+        assert [p.name for p in paths] == ["fig.png", "fig_clean.png"]
+        assert all(p.exists() for p in paths)
+        assert ax.get_title() == ""  # clean twin had its title stripped

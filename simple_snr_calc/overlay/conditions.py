@@ -1,15 +1,18 @@
 """Per-night measured observing conditions and how they map onto model config.
 
-senpai writes a ``nights_summary.csv`` aggregating each night's measured
-conditions (extinction, transmission, sky brightness, seeing, limiting mag).
-We translate those measurements into overrides on an :class:`SNRConfig` so the
-model is evaluated under the same sky the on-sky data was taken in -- making a
-model-vs-data overlay a fair comparison rather than design-spec vs reality.
+senpai writes a ``calibration/night_calibration.json`` per night, holding that
+night's measured conditions (extinction, transmission, sky brightness, seeing,
+limiting mag) under a ``conditions`` block. We translate those measurements into
+overrides on an :class:`SNRConfig` so the model is evaluated under the same sky
+the on-sky data was taken in -- making a model-vs-data overlay a fair comparison
+rather than design-spec vs reality. Everything needed lives in the night's own
+``calibration/`` folder; no cross-night aggregate (e.g. nights_summary.csv) is
+read here.
 """
 
 from __future__ import annotations
 
-import csv
+import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,17 +20,14 @@ from pathlib import Path
 from ..config import SNRConfig
 from ..optics import compute_ifov
 
-# senpai nights_summary.csv headers -> NightConditions fields.
-_SUMMARY_KEYS = {
-    "night": "night_id",
-    "moon%": "moon_illumination",
-    "moonSep°": "moon_sep_deg",
-    "k": "extinction_k",
-    "T_zen": "zenith_transmission",
-    "FWHM_px": "fwhm_px",
-    "sky_μ": "sky_mag_arcsec2",
-    "lim50": "limiting_mag_50",
-}
+# (G - V) colour of the Sun. simple-snr-calc's native magnitude is Johnson V
+# (its zero point is anchored to the Sun's V, integrating a solar spectrum), but
+# senpai's calibration axis is Gaia G. Adding this to the model's zero point
+# re-expresses model magnitudes in Gaia G for a solar-colour source -- which is
+# what a sunlight-reflecting target is -- so model and data share the Gaia-G axis.
+# Value: the Gaia EDR3 V-G vs (BP-RP) relation (Riello et al. 2021) at the solar
+# (BP-RP) ~ 0.82 gives V - G ~ +0.15, i.e. (G - V)_sun ~ -0.15.
+GAIA_G_MINUS_V_SUN = -0.15
 
 
 @dataclass
@@ -48,38 +48,43 @@ class NightConditions:
     moon_illumination: float | None = None    # fraction (0..1)
     moon_sep_deg: float | None = None
 
-    @classmethod
-    def from_summary_row(cls, row: dict[str, str]) -> "NightConditions":
-        def _f(key: str) -> float | None:
-            v = row.get(key)
-            if v is None or str(v).strip() in ("", "—", "nan", "None"):
-                return None
-            try:
-                return float(v)
-            except ValueError:
-                return None
 
-        return cls(
-            night_id=str(row.get("night", "")).strip(),
-            extinction_k=_f("k"),
-            zenith_transmission=_f("T_zen"),
-            sky_mag_arcsec2=_f("sky_μ"),
-            fwhm_px=_f("FWHM_px"),
-            limiting_mag_50=_f("lim50"),
-            moon_illumination=_f("moon%"),
-            moon_sep_deg=_f("moonSep°"),
-        )
+def load_night_conditions(path: str | Path) -> NightConditions:
+    """Build :class:`NightConditions` from a senpai ``night_calibration.json``.
 
+    This is the night's *own* measured calibration -- the per-night source senpai
+    later aggregates into a ``nights_summary.csv``. Reading it keeps the overlay
+    self-contained within the supplied run directory's ``calibration/`` folder,
+    so a night is never missing just because a cross-night summary went stale.
 
-def load_nights_summary(csv_path: str | Path) -> dict[str, NightConditions]:
-    """Load senpai's ``nights_summary.csv`` into ``{night_id: NightConditions}``."""
-    out: dict[str, NightConditions] = {}
-    with open(csv_path, newline="") as f:
-        for row in csv.DictReader(f):
-            cond = NightConditions.from_summary_row(row)
-            if cond.night_id:
-                out[cond.night_id] = cond
-    return out
+    A missing/non-numeric measurement becomes ``None`` and the corresponding
+    model knob is left at its config default by :func:`apply_conditions`.
+    """
+    with open(path) as f:
+        data = json.load(f)
+    c = data.get("conditions", {})
+
+    def _f(key: str) -> float | None:
+        v = c.get(key)
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    # moon_illumination is reported at the top level (and mirrored in conditions).
+    moon = data.get("moon_illumination", c.get("moon_illumination"))
+    return NightConditions(
+        night_id=str(data.get("night_id", "")).strip(),
+        extinction_k=_f("extinction_k"),
+        zenith_transmission=_f("zenith_transmission"),
+        sky_mag_arcsec2=_f("sky_mag_arcsec2_median"),
+        fwhm_px=_f("fwhm_px_median"),
+        limiting_mag_50=_f("limiting_mag_50_median"),
+        moon_illumination=float(moon) if moon is not None else None,
+        moon_sep_deg=_f("moon_sep_median_deg"),
+    )
 
 
 def r0_from_fwhm(fwhm_arcsec: float, wavelength_m: float) -> float:

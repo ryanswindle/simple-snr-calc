@@ -22,20 +22,28 @@ import numpy as np
 
 from ..config import SNRConfig, load_config
 from ..snr import SNRCalculator
-from .conditions import NightConditions, apply_conditions, load_nights_summary
-from .search_rate import load_plot_data
+from .conditions import (
+    GAIA_G_MINUS_V_SUN,
+    NightConditions,
+    apply_conditions,
+    load_night_conditions,
+)
+from .search_rate import load_plot_data, save_overlay_variants
 
 
 def model_snr_vs_mag(
     config: SNRConfig, exposures, mv_min: float, mv_max: float,
-    mv_step: float = 0.1,
+    mv_step: float = 0.1, zero_point_offset: float = 0.0,
 ) -> tuple[np.ndarray, dict, dict]:
     """Model SNR vs magnitude for each exposure.
 
     Returns ``(mvs, {exp: snr_array}, info)``. One ``SNRCalculator`` is built and
-    reused across all magnitudes and exposures.
+    reused across all magnitudes and exposures. ``zero_point_offset`` shifts the
+    system zero point (mag); pass :data:`GAIA_G_MINUS_V_SUN` to evaluate the
+    native-V model on a Gaia-G axis.
     """
     calc = SNRCalculator(config)
+    calc.zero_point += zero_point_offset
     mvs = np.arange(mv_min, mv_max + mv_step / 2, mv_step)
     curves: dict = {}
     for t in exposures:
@@ -51,18 +59,26 @@ def model_snr_vs_mag(
 
 def plot_snr_vs_mag_overlay(
     plot_data: dict | str | Path,
-    nights_summary: str | Path | dict[str, NightConditions],
+    conditions: NightConditions | str | Path,
     base_config: str | Path | SNRConfig,
     output_path: str | Path,
     *,
     mv_step: float = 0.1,
     plt=None,
 ):
-    """Render the SNR-vs-magnitude overlay PNG and return its :class:`Path`."""
+    """Render the SNR-vs-magnitude overlay; return the written paths.
+
+    Writes the titled ``output_path`` and a title-less ``*_clean`` twin for paper
+    figures, returning both :class:`Path` objects (titled first).
+
+    ``conditions`` is this night's measured conditions -- a
+    :class:`NightConditions` or a path to its
+    ``calibration/night_calibration.json``.
+    """
     if not isinstance(plot_data, dict):
         plot_data = load_plot_data(plot_data)
-    if not isinstance(nights_summary, dict):
-        nights_summary = load_nights_summary(nights_summary)
+    cond = (conditions if isinstance(conditions, NightConditions)
+            else load_night_conditions(conditions))
     base = base_config if isinstance(base_config, SNRConfig) else load_config(base_config)
 
     meta = plot_data.get("meta", {})
@@ -74,11 +90,6 @@ def plot_snr_vs_mag_overlay(
     if not d.get("lines"):
         raise ValueError(f"no on-sky SNR-vs-mag lines for {night_id!r}")
 
-    cond = nights_summary.get(night_id)
-    if cond is None:
-        raise KeyError(
-            f"night {night_id!r} not in nights_summary ({sorted(nights_summary)})")
-
     # Exposures and magnitude extent come straight from the on-sky panel so the
     # model is drawn over exactly the same curves.
     exposures = [ln["exp"] for ln in d["lines"]]
@@ -87,7 +98,8 @@ def plot_snr_vs_mag_overlay(
 
     cfg = apply_conditions(base, cond, mv_range=(mv_min, mv_max))
     model_mvs, model_curves, info = model_snr_vs_mag(
-        cfg, exposures, mv_min, mv_max, mv_step=mv_step)
+        cfg, exposures, mv_min, mv_max, mv_step=mv_step,
+        zero_point_offset=GAIA_G_MINUS_V_SUN)
 
     if plt is None:
         import matplotlib
@@ -137,15 +149,13 @@ def plot_snr_vs_mag_overlay(
 
     handles, labels = ax.get_legend_handles_labels()
     handles.append(Line2D([0], [0], color="black", ls="--", lw=1.8))
-    labels.append("simple-snr-calc model")
+    labels.append("model")
     ax.legend(handles, labels, loc="upper right", fontsize=8, title="exposure")
 
     fig.tight_layout()
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    paths = save_overlay_variants(fig, ax, output_path)
     plt.close(fig)
-    return output_path
+    return paths
 
 
 def _cond_line(cond: NightConditions, info: dict) -> str:

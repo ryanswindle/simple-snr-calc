@@ -9,11 +9,13 @@ from simple_snr_calc.overlay import (
     plot_snr_vs_exposure_overlay,
 )
 
-_SUMMARY_ROW = {
-    "night": "DAO01_20260602", "moon%": "0.92", "moonSep°": "61.4",
-    "k": "0.097", "T_zen": "0.91", "FWHM_px": "11.7", "sky_μ": "18.57",
-    "lim50": "16.55",
-}
+def _cond(**overrides):
+    """A night's measured conditions, as load_night_conditions would yield."""
+    base = dict(night_id="DAO01_20260602", extinction_k=0.097,
+                zenith_transmission=0.91, sky_mag_arcsec2=18.57, fwhm_px=11.7,
+                limiting_mag_50=16.55, moon_illumination=0.92, moon_sep_deg=61.4)
+    base.update(overrides)
+    return NightConditions(**base)
 
 
 def _synthetic_plot_data(night_id="DAO01_20260602", pooled=True):
@@ -57,29 +59,22 @@ class TestModelSnrVsExposure:
 
 class TestPlotSnrVsExposure:
 
-    def test_writes_png(self, tmp_path, ground_config):
-        summary = {"DAO01_20260602":
-                   NightConditions.from_summary_row(_SUMMARY_ROW)}
+    def test_writes_titled_and_clean(self, tmp_path, ground_config):
         out = tmp_path / "snr_vs_exposure.png"
-        path = plot_snr_vs_exposure_overlay(
-            _synthetic_plot_data(), summary, ground_config, out)
-        assert path.exists() and path.stat().st_size > 0
+        paths = plot_snr_vs_exposure_overlay(
+            _synthetic_plot_data(), _cond(), ground_config, out)
+        assert [p.name for p in paths] == [
+            "snr_vs_exposure.png", "snr_vs_exposure_clean.png"]
+        assert all(p.exists() and p.stat().st_size > 0 for p in paths)
 
     def test_missing_block_raises(self, ground_config):
         pd = _synthetic_plot_data()
         del pd["plots"]["snr_vs_exposure"]
         with pytest.raises(ValueError):
-            plot_snr_vs_exposure_overlay(pd, {}, ground_config, "/tmp/_x.png")
+            plot_snr_vs_exposure_overlay(pd, _cond(), ground_config, "/tmp/_x.png")
 
     def test_no_pooled_raises(self, ground_config):
-        summary = {"DAO01_20260602":
-                   NightConditions.from_summary_row(_SUMMARY_ROW)}
         with pytest.raises(ValueError):
             plot_snr_vs_exposure_overlay(
-                _synthetic_plot_data(pooled=False), summary,
+                _synthetic_plot_data(pooled=False), _cond(),
                 ground_config, "/tmp/_x.png")
-
-    def test_unknown_night_raises(self, ground_config):
-        with pytest.raises(KeyError):
-            plot_snr_vs_exposure_overlay(
-                _synthetic_plot_data("MISSING"), {}, ground_config, "/tmp/_x.png")
